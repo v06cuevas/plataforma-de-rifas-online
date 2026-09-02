@@ -68,6 +68,8 @@ export const TransferPaymentView: React.FC<TransferPaymentViewProps> = ({
   const [buyerEmail, setBuyerEmail] = useState<string>(user.email || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [showConfirmationModal, setShowConfirmationModal] = useState(false);
+  const [pendingSubmitData, setPendingSubmitData] = useState<any>(null);
 
   const currentSelectedBank = activeBanks.find((b) => b.id === selectedBankId) || activeBanks[0] || null;
 
@@ -153,27 +155,39 @@ export const TransferPaymentView: React.FC<TransferPaymentViewProps> = ({
       return;
     }
 
-    setIsSubmitting(true);
-
+    // Preparar datos y mostrar modal de confirmación
     const cleanSelected = Array.from(new Set(selectedNumbers));
     const cleanBonus = Array.from(new Set((bonusNumbers || []).filter((b) => !cleanSelected.includes(b))));
     const allAssignedNumbers = Array.from(new Set([...cleanSelected, ...cleanBonus]));
 
+    const submitData = {
+      raffleId: raffle.id,
+      selectedNumbers: allAssignedNumbers,
+      bonusNumbers: cleanBonus,
+      totalAmount,
+      destinationBank: currentSelectedBank.bankName,
+      referenceNumber: referenceNumber.trim().toUpperCase(),
+      senderName: buyerName.trim(),
+      senderPhone: buyerPhone.trim(),
+      senderEmail: buyerEmail.trim(),
+      senderCedula: buyerCedula.trim() || undefined,
+      receiptUrl,
+    };
+
+    setPendingSubmitData(submitData);
+    setShowConfirmationModal(true);
+  };
+
+  const handleConfirmSubmit = () => {
+    if (!pendingSubmitData) return;
+
+    setShowConfirmationModal(false);
+    setIsSubmitting(true);
+
     setTimeout(() => {
       setIsSubmitting(false);
-      onSubmitPaymentReport({
-        raffleId: raffle.id,
-        selectedNumbers: allAssignedNumbers,
-        bonusNumbers: cleanBonus,
-        totalAmount,
-        destinationBank: currentSelectedBank.bankName,
-        referenceNumber: referenceNumber.trim().toUpperCase(),
-        senderName: buyerName.trim(),
-        senderPhone: buyerPhone.trim(),
-        senderEmail: buyerEmail.trim(),
-        senderCedula: buyerCedula.trim() || undefined,
-        receiptUrl,
-      });
+      onSubmitPaymentReport(pendingSubmitData);
+      setPendingSubmitData(null);
     }, 600);
   };
 
@@ -204,19 +218,6 @@ export const TransferPaymentView: React.FC<TransferPaymentViewProps> = ({
         <p className="text-xs sm:text-sm text-slate-600">
           Transfiere el monto exacto a una de nuestras cuentas oficiales y sube el comprobante. Tus boletos quedarán apartados de inmediato.
         </p>
-
-        {/* CUSTODY WARNING BOX */}
-        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-900 flex items-start gap-3 shadow-2xs">
-          <Clock className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
-          <div className="text-xs space-y-1">
-            <p className="font-extrabold text-amber-950">
-              Custodia Notarial y Tiempo de Confirmación:
-            </p>
-            <p className="text-amber-900 leading-relaxed">
-              Tus boletos quedan en estado <strong className="underline">Pendiente de Verificación</strong> en cuanto envías este reporte. Un oficial de cumplimiento confirmará el depósito con el banco (tiempo promedio: 15 a 45 minutos) y tus boletos pasarán a estado <strong>Confirmado</strong>.
-            </p>
-          </div>
-        </div>
       </div>
 
       {/* 2-Column Form Layout */}
@@ -482,8 +483,8 @@ export const TransferPaymentView: React.FC<TransferPaymentViewProps> = ({
               <button
                 type="submit"
                 id="btn-submit-transfer-report"
-                disabled={isSubmitting || isUploadingReceipt}
-                className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50"
+                disabled={isSubmitting || isUploadingReceipt || showConfirmationModal}
+                className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? (
                   <span className="flex items-center gap-2">
@@ -505,6 +506,70 @@ export const TransferPaymentView: React.FC<TransferPaymentViewProps> = ({
           </form>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      {showConfirmationModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full space-y-6 animate-in fade-in zoom-in duration-200">
+            {/* Modal Header */}
+            <div className="pt-6 px-6">
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                  <Clock className="w-6 h-6 text-amber-700" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-black text-slate-900">
+                    Custodia Notarial y Tiempo de Confirmación
+                  </h3>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Content */}
+            <div className="px-6 space-y-4">
+              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-3">
+                <p className="text-sm leading-relaxed">
+                  Tus boletos quedan en estado <strong className="underline">Pendiente de Verificación</strong> en cuanto envías este reporte.
+                </p>
+                <p className="text-sm leading-relaxed">
+                  Un oficial de cumplimiento confirmará el depósito con el banco <strong className="font-bold">(tiempo promedio: 15 a 45 minutos)</strong> y tus boletos pasarán a estado <strong>Confirmado</strong>.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="px-6 pb-6 space-y-3">
+              <button
+                type="button"
+                onClick={handleConfirmSubmit}
+                disabled={isSubmitting}
+                className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    Enviando...
+                  </span>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Confirmar y Reservar Boletos</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowConfirmationModal(false)}
+                disabled={isSubmitting}
+                className="w-full py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-900 font-bold text-sm transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
