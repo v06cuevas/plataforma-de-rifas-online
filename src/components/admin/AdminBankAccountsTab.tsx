@@ -79,7 +79,7 @@ export const AdminBankAccountsTab: React.FC<AdminBankAccountsTabProps> = ({
       onUpdateBankAccounts(updated);
     } else {
       const newAcc: BankAccount = {
-        id: `bank-${Date.now()}`,
+        id: '',
         bankName,
         bankCode: `BK-0${bankAccounts.length + 1}`,
         accountNumber: accountNumber.trim(),
