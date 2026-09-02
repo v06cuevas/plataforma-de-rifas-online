@@ -212,6 +212,35 @@ export default function App() {
     };
   }, [isLoading, adminProfile?.role]);
 
+  // Manejar navegación por URL hash (para QR codes y links)
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.slice(1); // Remove '#'
+      if (!hash) {
+        setCurrentScreen('home');
+        return;
+      }
+
+      // Parse URL: #my-tickets?ticket=abc123
+      const [screen, queryString] = hash.split('?');
+      
+      if (screen === 'my-tickets' && user.isLoggedIn) {
+        setCurrentScreen('my_tickets');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (screen === 'my-tickets') {
+        // Si no está logueado, pedir login primero
+        setIsAuthModalOpen(true);
+      }
+    };
+
+    // Manejar el hash actual al montar
+    handleHashChange();
+
+    // Escuchar cambios de hash
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [user.isLoggedIn]);
+
   // Cargar medios de la rifa cuando se abre el detalle
   useEffect(() => {
     if (currentScreen !== 'raffle_detail' || !selectedRaffleId) return;

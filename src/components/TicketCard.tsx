@@ -11,17 +11,21 @@ export const TicketCard: React.FC<TicketCardProps> = ({ ticket, onViewRaffle }) 
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [isDownloadingImage, setIsDownloadingImage] = useState(false);
   const ticketDisplayId = ticket.id.split('-').pop()?.replace(/\D/g, '') || ticket.id.replace(/\D/g, '');
-  const qrPayload = 'https://rifascaribe.vercel.app/';
 
   const handleDownloadClick = () => {
     setShowDownloadModal(true);
   };
 
   const handleConfirmDownload = async () => {
-    setIsDownloadingImage(true);
     setShowDownloadModal(false);
-    await generateTicketImage(ticket);
-    setIsDownloadingImage(false);
+    setIsDownloadingImage(true);
+    try {
+      await generateTicketImage(ticket);
+    } catch (error) {
+      console.error('Error descargando boleto:', error);
+    } finally {
+      setIsDownloadingImage(false);
+    }
   };
   const status = (value: TicketStatus) => {
     if (value === 'pending_payment') return { label: 'PENDIENTE DE VERIFICACIÓN', icon: <Clock className="h-3.5 w-3.5" />, bar: 'bg-amber-500', badge: 'bg-amber-100 text-amber-900 border-amber-300' };

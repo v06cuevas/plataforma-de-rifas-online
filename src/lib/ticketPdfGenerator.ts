@@ -6,7 +6,7 @@ import { Ticket } from '../types';
 async function generateBrandedQRDataUrl(ticket: Ticket, size: number = 400): Promise<string> {
   return new Promise((resolve, reject) => {
     try {
-      const qrPayload = 'https://rifascaribe.vercel.app/';
+      const qrPayload = `https://rifascaribe.vercel.app/#my-tickets?ticket=${ticket.id}`;
 
       // Crear elemento QR temporal
       const qrElement = document.createElement('div');
@@ -200,16 +200,47 @@ export async function generateTicketImage(ticket: Ticket): Promise<void> {
       allowTaint: true,
     });
 
-    // Convertir canvas a imagen PNG de alta calidad y descargar
-    const link = document.createElement('a');
-    link.href = canvas.toDataURL('image/png', 1.0);
-    link.download = `boleto-${ticket.ticketNumber}.png`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Convertir canvas a blob para mejor compatibilidad con móviles
+    return new Promise<void>((resolve) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          alert('Error al generar la imagen del boleto. Intenta de nuevo.');
+          document.body.removeChild(container);
+          resolve();
+          return;
+        }
 
-    // Limpiar
-    document.body.removeChild(container);
+        // Crear URL del blob
+        const blobUrl = URL.createObjectURL(blob);
+        
+        // Detectar si es iOS
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        
+        if (isIOS) {
+          // Para iOS: abrir en nueva ventana para que el usuario pueda guardar
+          const newWindow = window.open();
+          if (newWindow) {
+            newWindow.document.body.innerHTML = `<img src="${blobUrl}" style="width: 100%; height: auto;" />`;
+            newWindow.document.title = `boleto-${ticket.ticketNumber}.png`;
+          }
+        } else {
+          // Para Android y PC: descargar directamente
+          const link = document.createElement('a');
+          link.href = blobUrl;
+          link.download = `boleto-${ticket.ticketNumber}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+        
+        // Limpiar recursos después de un pequeño retraso
+        setTimeout(() => {
+          URL.revokeObjectURL(blobUrl);
+          document.body.removeChild(container);
+          resolve();
+        }, 100);
+      }, 'image/png');
+    });
   } catch (error) {
     console.error('Error generando imagen del boleto:', error);
     alert('Error al generar la imagen del boleto. Intenta de nuevo.');

@@ -18,7 +18,7 @@ export const BrandedQRCode: React.FC<BrandedQRCodeProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
-  const qrPayload = 'https://rifascaribe.vercel.app/';
+  const qrPayload = `https://rifascaribe.vercel.app/#my-tickets?ticket=${ticket.id}`;
 
   useEffect(() => {
     // Generar QR desde la API externa
