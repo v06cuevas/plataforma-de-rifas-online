@@ -216,20 +216,14 @@ export default function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1); // Remove '#'
-      if (!hash) {
-        setCurrentScreen('home');
-        return;
-      }
+      if (!hash) return;
 
       // Parse URL: #my-tickets?ticket=abc123
-      const [screen, queryString] = hash.split('?');
+      const screen = hash.split('?')[0];
       
-      if (screen === 'my-tickets' && user.isLoggedIn) {
+      if (screen === 'my-tickets') {
         setCurrentScreen('my_tickets');
         window.scrollTo({ top: 0, behavior: 'smooth' });
-      } else if (screen === 'my-tickets') {
-        // Si no está logueado, pedir login primero
-        setIsAuthModalOpen(true);
       }
     };
 
@@ -239,7 +233,7 @@ export default function App() {
     // Escuchar cambios de hash
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [user.isLoggedIn]);
+  }, []);
 
   // Cargar medios de la rifa cuando se abre el detalle
   useEffect(() => {

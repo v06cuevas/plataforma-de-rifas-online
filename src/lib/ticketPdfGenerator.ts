@@ -191,6 +191,9 @@ export async function generateTicketImage(ticket: Ticket): Promise<void> {
     container.innerHTML = htmlContent;
     document.body.appendChild(container);
 
+    // Dar tiempo para que el DOM se renderice completamente
+    await new Promise(resolve => setTimeout(resolve, 500));
+
     // Capturar el elemento como imagen PNG en máxima calidad
     const canvas = await html2canvas(container, {
       scale: 3, // Máxima calidad para iOS, Android y PC
@@ -198,51 +201,41 @@ export async function generateTicketImage(ticket: Ticket): Promise<void> {
       backgroundColor: '#ffffff',
       logging: false,
       allowTaint: true,
+      removeContainer: false,
     });
 
-    // Convertir canvas a blob para mejor compatibilidad con móviles
-    return new Promise<void>((resolve) => {
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          alert('Error al generar la imagen del boleto. Intenta de nuevo.');
-          document.body.removeChild(container);
-          resolve();
-          return;
-        }
+    // Limpiar contenedor del DOM
+    document.body.removeChild(container);
 
-        // Crear URL del blob
-        const blobUrl = URL.createObjectURL(blob);
-        
-        // Detectar si es iOS
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-        
-        if (isIOS) {
-          // Para iOS: abrir en nueva ventana para que el usuario pueda guardar
-          const newWindow = window.open();
-          if (newWindow) {
-            newWindow.document.body.innerHTML = `<img src="${blobUrl}" style="width: 100%; height: auto;" />`;
-            newWindow.document.title = `boleto-${ticket.ticketNumber}.png`;
-          }
-        } else {
-          // Para Android y PC: descargar directamente
-          const link = document.createElement('a');
-          link.href = blobUrl;
-          link.download = `boleto-${ticket.ticketNumber}.png`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        }
-        
-        // Limpiar recursos después de un pequeño retraso
-        setTimeout(() => {
-          URL.revokeObjectURL(blobUrl);
-          document.body.removeChild(container);
-          resolve();
-        }, 100);
-      }, 'image/png');
-    });
+    // Convertir directamente a data URL para descargar
+    const imageData = canvas.toDataURL('image/png');
+    const fileName = `boleto-${ticket.ticketNumber}.png`;
+    
+    // Detectar dispositivo
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isAndroid = /Android/.test(navigator.userAgent);
+    
+    if (isIOS) {
+      // iOS: Abrir en nueva ventana (el usuario hace hold + Guardar)
+      const imgWindow = window.open();
+      if (imgWindow) {
+        imgWindow.document.write(`<img src="${imageData}" style="width: 100%; height: auto; margin: 0; padding: 0;" />`);
+        imgWindow.document.title = fileName;
+      } else {
+        alert('No se pudo abrir la ventana. Por favor, habilita las ventanas emergentes.');
+      }
+    } else {
+      // Android y PC: Descargar directamente
+      const link = document.createElement('a');
+      link.href = imageData;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   } catch (error) {
     console.error('Error generando imagen del boleto:', error);
     alert('Error al generar la imagen del boleto. Intenta de nuevo.');
+    throw error;
   }
 }
