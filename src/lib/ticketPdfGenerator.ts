@@ -2,25 +2,98 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Ticket } from '../types';
 
-export async function generateTicketPdf(ticket: Ticket): Promise<void> {
+// Función para generar QR con logo en el centro
+async function generateBrandedQRDataUrl(ticket: Ticket, size: number = 400): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      const qrPayload = 'https://rifascaribe.vercel.app/';
+
+      // Crear elemento QR temporal
+      const qrElement = document.createElement('div');
+      qrElement.style.position = 'fixed';
+      qrElement.style.left = '-9999px';
+      document.body.appendChild(qrElement);
+
+      // Renderizar QR (simplificado - usaremos canvas directamente)
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        document.body.removeChild(qrElement);
+        reject(new Error('No context 2d'));
+        return;
+      }
+
+      // Generar QR usando la API externa para obtener imagen
+      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=3&data=${encodeURIComponent(
+        qrPayload
+      )}`;
+
+      const qrImage = new Image();
+      qrImage.onload = () => {
+        // Dibujar QR base
+        ctx.drawImage(qrImage, 0, 0, size, size);
+
+        const centerX = size / 2;
+        const centerY = size / 2;
+
+        // Pequeño círculo azul con logo (sin fondo blanco)
+        const smallLogoRadius = 40;
+        ctx.fillStyle = '#0F2137';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, smallLogoRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Cargar y dibujar el favicon en el centro (pequeño)
+        const logoImage = new Image();
+        logoImage.onload = () => {
+          ctx.save();
+          ctx.globalAlpha = 0.95;
+          const logoDisplaySize = smallLogoRadius * 1.6;
+          ctx.drawImage(
+            logoImage,
+            centerX - logoDisplaySize / 2,
+            centerY - logoDisplaySize / 2,
+            logoDisplaySize,
+            logoDisplaySize
+          );
+          ctx.restore();
+          document.body.removeChild(qrElement);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        logoImage.crossOrigin = 'anonymous';
+        logoImage.src = '/favicon.svg';
+      };
+
+      qrImage.onerror = () => {
+        document.body.removeChild(qrElement);
+        reject(new Error('Failed to load QR image'));
+      };
+
+      qrImage.crossOrigin = 'anonymous';
+      qrImage.src = qrImageUrl;
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+export async function generateTicketImage(ticket: Ticket): Promise<void> {
   try {
+    // Generar QR con logo
+    const qrDataUrl = await generateBrandedQRDataUrl(ticket, 400);
+
     // Crear elemento DOM temporal para capturar el certificado
     const container = document.createElement('div');
-    container.style.width = '210mm'; // A4 width
-    container.style.padding = '20px';
+    container.style.width = '800px';
+    container.style.padding = '40px 30px';
     container.style.backgroundColor = '#ffffff';
     container.style.fontFamily = 'system-ui, -apple-system, sans-serif';
     container.style.position = 'fixed';
     container.style.left = '-9999px';
     container.style.top = '-9999px';
-
-    // Generar código QR
-    const qrPayload = JSON.stringify({ 
-      ticket: ticket.ticketNumber, 
-      raffle: ticket.raffleId, 
-      reference: ticket.referenceNumber 
-    });
-    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(qrPayload)}`;
 
     // Estructura HTML del certificado
     const htmlContent = `
@@ -84,11 +157,14 @@ export async function generateTicketPdf(ticket: Ticket): Promise<void> {
 
           <!-- Right: QR Code -->
           <div style="text-align: center;">
-            <div style="background: white; padding: 20px; border-radius: 12px; border: 2px solid #0f172a; display: inline-block;">
-              <img src="${qrImageUrl}" alt="Código QR" style="width: 200px; height: 200px; object-fit: contain;">
+            <div style="background: white; padding: 25px; border-radius: 16px; border: 3px solid #0f172a; display: inline-block; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+              <img src="${qrDataUrl}" alt="Código QR" style="width: 280px; height: 280px; object-fit: contain; border-radius: 8px;">
             </div>
-            <div style="font-size: 11px; color: #64748b; margin-top: 12px; font-weight: bold;">
-              Escanea para verificar tu boleto
+            <div style="font-size: 12px; color: #0f172a; margin-top: 16px; font-weight: 900; letter-spacing: 0.5px;">
+              📱 Escanea para acceder a tu boleto
+            </div>
+            <div style="font-size: 10px; color: #64748b; margin-top: 4px;">
+              (Lleva a https://rifascaribe.vercel.app/)
             </div>
           </div>
         </div>
@@ -100,7 +176,7 @@ export async function generateTicketPdf(ticket: Ticket): Promise<void> {
           </div>
           <div style="font-size: 11px; color: #047857; line-height: 1.6;">
             Este certificado es tu comprobante oficial de participación en la rifa. Guárdalo en un lugar seguro. 
-            El código QR contiene información verificable de tu boleto. En caso de duda, contacta con nuestro equipo de soporte.
+            Escanea el código QR para acceder a la plataforma oficial. En caso de duda, contacta con nuestro equipo de soporte.
           </div>
         </div>
 
@@ -115,47 +191,27 @@ export async function generateTicketPdf(ticket: Ticket): Promise<void> {
     container.innerHTML = htmlContent;
     document.body.appendChild(container);
 
-    // Capturar el elemento como canvas
+    // Capturar el elemento como imagen PNG en máxima calidad
     const canvas = await html2canvas(container, {
-      scale: 2,
+      scale: 3, // Máxima calidad para iOS, Android y PC
       useCORS: true,
       backgroundColor: '#ffffff',
       logging: false,
+      allowTaint: true,
     });
 
-    // Crear PDF
-    const pdf = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4',
-    });
-
-    const imgData = canvas.toDataURL('image/png');
-    const imgWidth = 210; // A4 width in mm
-    const pageHeight = 297; // A4 height in mm
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    let heightLeft = imgHeight;
-    let position = 0;
-
-    // Agregar imagen al PDF (permite múltiples páginas si es necesario)
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft >= 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-    }
-
-    // Descargar PDF
-    pdf.save(`boleto-${ticket.ticketNumber}.pdf`);
+    // Convertir canvas a imagen PNG de alta calidad y descargar
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png', 1.0);
+    link.download = `boleto-${ticket.ticketNumber}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 
     // Limpiar
     document.body.removeChild(container);
   } catch (error) {
-    console.error('Error generando PDF:', error);
-    alert('Error al generar el PDF. Intenta de nuevo.');
+    console.error('Error generando imagen del boleto:', error);
+    alert('Error al generar la imagen del boleto. Intenta de nuevo.');
   }
 }
