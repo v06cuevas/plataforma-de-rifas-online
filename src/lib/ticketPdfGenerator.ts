@@ -1,238 +1,94 @@
-import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Ticket } from '../types';
 
-// Función para generar QR con logo en el centro
-async function generateBrandedQRDataUrl(ticket: Ticket, size: number = 400): Promise<string> {
-  return new Promise((resolve, reject) => {
-    try {
-      const qrPayload = `https://rifascaribe.vercel.app/#my-tickets?ticket=${ticket.id}`;
-
-      // Crear elemento QR temporal
-      const qrElement = document.createElement('div');
-      qrElement.style.position = 'fixed';
-      qrElement.style.left = '-9999px';
-      document.body.appendChild(qrElement);
-
-      // Renderizar QR (simplificado - usaremos canvas directamente)
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d');
-
-      if (!ctx) {
-        document.body.removeChild(qrElement);
-        reject(new Error('No context 2d'));
-        return;
-      }
-
-      // Generar QR usando la API externa para obtener imagen
-      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=3&data=${encodeURIComponent(
-        qrPayload
-      )}`;
-
-      const qrImage = new Image();
-      qrImage.onload = () => {
-        // Dibujar QR base
-        ctx.drawImage(qrImage, 0, 0, size, size);
-
-        const centerX = size / 2;
-        const centerY = size / 2;
-
-        // Pequeño círculo azul con logo (sin fondo blanco)
-        const smallLogoRadius = 40;
-        ctx.fillStyle = '#0F2137';
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, smallLogoRadius, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Cargar y dibujar el favicon en el centro (pequeño)
-        const logoImage = new Image();
-        logoImage.onload = () => {
-          ctx.save();
-          ctx.globalAlpha = 0.95;
-          const logoDisplaySize = smallLogoRadius * 1.6;
-          ctx.drawImage(
-            logoImage,
-            centerX - logoDisplaySize / 2,
-            centerY - logoDisplaySize / 2,
-            logoDisplaySize,
-            logoDisplaySize
-          );
-          ctx.restore();
-          document.body.removeChild(qrElement);
-          resolve(canvas.toDataURL('image/png'));
-        };
-        logoImage.crossOrigin = 'anonymous';
-        logoImage.src = '/favicon.svg';
-      };
-
-      qrImage.onerror = () => {
-        document.body.removeChild(qrElement);
-        reject(new Error('Failed to load QR image'));
-      };
-
-      qrImage.crossOrigin = 'anonymous';
-      qrImage.src = qrImageUrl;
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-export async function generateTicketImage(ticket: Ticket): Promise<void> {
+/**
+ * Descarga el boleto EXACTAMENTE con el mismo diseño que el usuario ve en
+ * pantalla (mismos colores, layout, QR, badges, etc.).
+ *
+ * Antes esta función construía un HTML/diseño alterno desde cero (más
+ * simple, tipo "certificado"), por lo que la imagen descargada nunca
+ * coincidía con la tarjeta real del boleto. Ahora se captura directamente
+ * el nodo del DOM de la tarjeta (`ticketElement`), así que el resultado es
+ * siempre idéntico a lo que se ve en la app.
+ *
+ * Cualquier elemento hijo con el atributo `data-html2canvas-ignore="true"`
+ * (por ejemplo los botones de acción) se excluye automáticamente de la
+ * captura para que la imagen final quede limpia.
+ */
+export async function generateTicketImage(
+  ticket: Ticket,
+  ticketElement: HTMLElement
+): Promise<void> {
   try {
-    // Generar QR con logo
-    const qrDataUrl = await generateBrandedQRDataUrl(ticket, 400);
-
-    // Crear elemento DOM temporal para capturar el certificado
-    const container = document.createElement('div');
-    container.style.width = '800px';
-    container.style.padding = '40px 30px';
-    container.style.backgroundColor = '#ffffff';
-    container.style.fontFamily = 'system-ui, -apple-system, sans-serif';
-    container.style.position = 'fixed';
-    container.style.left = '-9999px';
-    container.style.top = '-9999px';
-
-    // Estructura HTML del certificado
-    const htmlContent = `
-      <div style="max-width: 800px; margin: 0 auto; padding: 40px 30px; border: 3px solid #0f172a; border-radius: 16px; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);">
-        
-        <!-- Header -->
-        <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #0f172a;">
-          <div style="font-size: 28px; font-weight: 900; color: #0f172a; letter-spacing: 2px;">
-            🎟️ CERTIFICADO DE PARTICIPACIÓN OFICIAL
-          </div>
-          <div style="font-size: 12px; color: #64748b; margin-top: 8px; letter-spacing: 1px;">
-            PLATAFORMA DE RIFAS EN LÍNEA
-          </div>
-        </div>
-
-        <!-- Main Content -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; align-items: center;">
-          
-          <!-- Left: Raffle Info -->
-          <div>
-            <div style="margin-bottom: 20px;">
-              <div style="font-size: 11px; color: #64748b; font-weight: 900; letter-spacing: 1px; margin-bottom: 4px;">
-                RIFA PARTICIPANTE
-              </div>
-              <div style="font-size: 18px; font-weight: 900; color: #0f172a; line-height: 1.3;">
-                ${ticket.raffleTitle}
-              </div>
-            </div>
-
-            <div style="background: #f1f5f9; padding: 15px; border-radius: 12px; border-left: 4px solid #10b981;">
-              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px;">
-                <span style="color: #64748b; font-weight: bold;">Número de Boleto:</span>
-                <span style="font-family: monospace; font-weight: 900; color: #0f172a; font-size: 14px;">#${ticket.ticketNumber}</span>
-              </div>
-              
-              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px;">
-                <span style="color: #64748b; font-weight: bold;">Estado:</span>
-                <span style="font-weight: 900; color: ${ticket.status === 'winner' ? '#ca8a04' : ticket.status === 'confirmed' ? '#10b981' : '#f59e0b'};">
-                  ${ticket.status === 'pending_payment' ? '⏳ PENDIENTE' : ticket.status === 'confirmed' ? '✓ CONFIRMADO' : ticket.status === 'winner' ? '🏆 GANADOR' : '✗ CANCELADO'}
-                </span>
-              </div>
-
-              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px;">
-                <span style="color: #64748b; font-weight: bold;">Monto Pagado:</span>
-                <span style="font-family: monospace; font-weight: bold; color: #0f172a;">
-                  ${ticket.isBonusTicket ? 'GRATIS' : `RD$ ${ticket.pricePaid.toLocaleString()}`}
-                </span>
-              </div>
-
-              <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px;">
-                <span style="color: #64748b; font-weight: bold;">Banco:</span>
-                <span style="font-weight: bold; color: #0f172a;">${ticket.bankUsed}</span>
-              </div>
-
-              <div style="display: flex; justify-content: space-between; font-size: 11px;">
-                <span style="color: #64748b; font-weight: bold;">Referencia:</span>
-                <span style="font-family: monospace; font-weight: bold; color: #0f172a;">${ticket.referenceNumber}</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Right: QR Code -->
-          <div style="text-align: center;">
-            <div style="background: white; padding: 25px; border-radius: 16px; border: 3px solid #0f172a; display: inline-block; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-              <img src="${qrDataUrl}" alt="Código QR" style="width: 280px; height: 280px; object-fit: contain; border-radius: 8px;">
-            </div>
-            <div style="font-size: 12px; color: #0f172a; margin-top: 16px; font-weight: 900; letter-spacing: 0.5px;">
-              📱 Escanea para acceder a tu boleto
-            </div>
-            <div style="font-size: 10px; color: #64748b; margin-top: 4px;">
-              (Lleva a https://rifascaribe.vercel.app/)
-            </div>
-          </div>
-        </div>
-
-        <!-- Additional Info -->
-        <div style="background: #ecfdf5; padding: 15px; border-radius: 12px; border: 2px solid #10b981; margin-bottom: 20px;">
-          <div style="font-size: 12px; font-weight: bold; color: #047857; margin-bottom: 8px;">
-            ✓ BOLETO SEGURO Y VERIFICADO
-          </div>
-          <div style="font-size: 11px; color: #047857; line-height: 1.6;">
-            Este certificado es tu comprobante oficial de participación en la rifa. Guárdalo en un lugar seguro. 
-            Escanea el código QR para acceder a la plataforma oficial. En caso de duda, contacta con nuestro equipo de soporte.
-          </div>
-        </div>
-
-        <!-- Footer -->
-        <div style="text-align: center; font-size: 10px; color: #94a3b8; padding-top: 15px; border-top: 1px solid #cbd5e1;">
-          <div>Generado el: ${new Date().toLocaleDateString('es-DO')} a las ${new Date().toLocaleTimeString('es-DO')}</div>
-          <div style="margin-top: 4px;">Documento válido - Descargado desde PLATAFORMA DE RIFAS EN LÍNEA</div>
-        </div>
-      </div>
-    `;
-
-    container.innerHTML = htmlContent;
-    document.body.appendChild(container);
-
-    // Dar tiempo para que el DOM se renderice completamente
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // Capturar el elemento como imagen PNG en máxima calidad
-    const canvas = await html2canvas(container, {
-      scale: 3, // Máxima calidad para iOS, Android y PC
+    const canvas = await html2canvas(ticketElement, {
+      scale: 3, // Alta resolución para iOS, Android y PC
       useCORS: true,
       backgroundColor: '#ffffff',
       logging: false,
-      allowTaint: true,
-      removeContainer: false,
+      allowTaint: false,
+      ignoreElements: (el) => el.getAttribute('data-html2canvas-ignore') === 'true',
     });
 
-    // Limpiar contenedor del DOM
-    document.body.removeChild(container);
-
-    // Convertir directamente a data URL para descargar
-    const imageData = canvas.toDataURL('image/png');
     const fileName = `boleto-${ticket.ticketNumber}.png`;
-    
-    // Detectar dispositivo
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    const isAndroid = /Android/.test(navigator.userAgent);
-    
+
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/png', 1)
+    );
+
+    if (!blob) {
+      throw new Error('No se pudo generar la imagen del boleto');
+    }
+
+    const isIOS =
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    // 1) Web Share API nativo (iOS/Android modernos): abre el share sheet
+    //    real del sistema con la imagen ya adjunta, permitiendo "Guardar
+    //    imagen" con un solo toque, sin salir de la app.
+    if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
+      try {
+        const file = new File([blob], fileName, { type: 'image/png' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: fileName,
+            text: `Boleto #${ticket.ticketNumber}`,
+          });
+          return;
+        }
+      } catch (shareError) {
+        // Si el usuario cancela el share sheet no es un error real.
+        if ((shareError as Error)?.name === 'AbortError') return;
+        // Si falla por otro motivo, seguimos con el fallback de abajo.
+      }
+    }
+
     if (isIOS) {
-      // iOS: Abrir en nueva ventana (el usuario hace hold + Guardar)
+      // Fallback iOS sin Web Share API: abrir en pestaña nueva
+      // (mantener presionado + Guardar en Fotos).
+      const dataUrl = canvas.toDataURL('image/png');
       const imgWindow = window.open();
       if (imgWindow) {
-        imgWindow.document.write(`<img src="${imageData}" style="width: 100%; height: auto; margin: 0; padding: 0;" />`);
+        imgWindow.document.write(
+          `<img src="${dataUrl}" style="width: 100%; height: auto; margin: 0; padding: 0;" />`
+        );
         imgWindow.document.title = fileName;
       } else {
         alert('No se pudo abrir la ventana. Por favor, habilita las ventanas emergentes.');
       }
-    } else {
-      // Android y PC: Descargar directamente
-      const link = document.createElement('a');
-      link.href = imageData;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      return;
     }
+
+    // Android y PC: descarga directa del archivo.
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
   } catch (error) {
     console.error('Error generando imagen del boleto:', error);
     alert('Error al generar la imagen del boleto. Intenta de nuevo.');

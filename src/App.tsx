@@ -212,6 +212,9 @@ export default function App() {
     };
   }, [isLoading, adminProfile?.role]);
 
+  // Boleto pendiente por auto-descarga cuando se llega vía QR (#my-tickets?ticket=ID)
+  const [pendingTicketId, setPendingTicketId] = useState<string | null>(null);
+
   // Manejar navegación por URL hash (para QR codes y links)
   useEffect(() => {
     const handleHashChange = () => {
@@ -219,10 +222,19 @@ export default function App() {
       if (!hash) return;
 
       // Parse URL: #my-tickets?ticket=abc123
-      const screen = hash.split('?')[0];
-      
+      const [screen, queryString] = hash.split('?');
+
       if (screen === 'my-tickets') {
         setCurrentScreen('my_tickets');
+
+        // Si el link trae el ID del boleto (viene de escanear su QR),
+        // lo guardamos para preguntar automáticamente si se desea descargar.
+        if (queryString) {
+          const params = new URLSearchParams(queryString);
+          const ticketId = params.get('ticket');
+          if (ticketId) setPendingTicketId(ticketId);
+        }
+
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     };
@@ -578,6 +590,8 @@ export default function App() {
                   setCurrentScreen('support');
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
+                focusTicketId={pendingTicketId}
+                onFocusHandled={() => setPendingTicketId(null)}
               />
             )}
 
