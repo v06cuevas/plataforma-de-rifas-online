@@ -1,3 +1,4 @@
+// olvin: import useEffect agregado
 import React, { useState, useEffect } from 'react';
 import { Clock, Trophy, ArrowRight } from 'lucide-react';
 import { Ticket, TicketStatus, UserProfile } from '../types';
@@ -10,9 +11,9 @@ interface MyTicketsViewProps {
   onViewRaffle: (raffleId: string) => void;
   onNavigateToSupport: () => void;
   /** ID del boleto al que se llegó escaneando su código QR */
-  focusTicketId?: string | null;
+  focusTicketId?: string | null; // olvin
   /** se llama en cuanto ya se ubicó/atendió el boleto del QR */
-  onFocusHandled?: () => void;
+  onFocusHandled?: () => void; // olvin
 }
 
 export const MyTicketsView: React.FC<MyTicketsViewProps> = ({ tickets = [], onExploreRaffles, onViewRaffle, focusTicketId, onFocusHandled }) => {
@@ -22,7 +23,7 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({ tickets = [], onEx
   const confirmedCount = safeTickets.filter((ticket) => ticket.status === 'confirmed').length;
   const winnerCount = safeTickets.filter((ticket) => ticket.status === 'winner').length;
 
-  // Si venimos de escanear el QR de un boleto que quedó fuera del filtro
+  // olvin: si venimos de escanear el QR de un boleto que quedó fuera del filtro
   // actual (ej. filtro "Confirmados" pero el boleto está "Pendiente"),
   // mostramos "Todos" para asegurar que sea visible.
   useEffect(() => {
@@ -30,9 +31,9 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({ tickets = [], onEx
   }, [focusTicketId]);
 
   const filteredTickets = safeTickets.filter((ticket) => statusFilter === 'all' || ticket.status === statusFilter);
-  const focusedTicket = focusTicketId ? safeTickets.find((ticket) => ticket.id === focusTicketId) : undefined;
+  const focusedTicket = focusTicketId ? safeTickets.find((ticket) => ticket.id === focusTicketId) : undefined; // olvin
 
-  // Hace scroll hasta el boleto escaneado en cuanto está disponible en la lista.
+  // olvin: hace scroll hasta el boleto escaneado en cuanto está disponible en la lista.
   useEffect(() => {
     if (!focusedTicket) return;
     const el = document.getElementById(`ticket-${focusedTicket.id}`);
@@ -47,6 +48,6 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({ tickets = [], onEx
       {winnerCount > 0 && <button type="button" onClick={() => setStatusFilter('winner')} className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-[11px] font-bold ${statusFilter === 'winner' ? 'bg-yellow-500 text-slate-950' : 'border border-yellow-300 bg-white text-yellow-800'}`}><Trophy className="h-3 w-3" /> Ganadores ({winnerCount})</button>}
     </div>
 
-    {filteredTickets.length === 0 ? <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><h3 className="font-extrabold text-slate-800">No se encontraron boletos</h3><p className="mt-1 text-xs text-slate-500">Participa en una rifa activa para obtener tu boleto.</p><button type="button" onClick={onExploreRaffles} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white"><span>Explorar rifas</span><ArrowRight className="h-3.5 w-3.5" /></button></div> : <div className="space-y-3">{filteredTickets.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} onViewRaffle={onViewRaffle} autoDownload={ticket.id === focusTicketId} onAutoDownloadHandled={onFocusHandled} />)}</div>}
+    {filteredTickets.length === 0 ? <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><h3 className="font-extrabold text-slate-800">No se encontraron boletos</h3><p className="mt-1 text-xs text-slate-500">Participa en una rifa activa para obtener tu boleto.</p><button type="button" onClick={onExploreRaffles} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white"><span>Explorar rifas</span><ArrowRight className="h-3.5 w-3.5" /></button></div> : <div className="space-y-3">{filteredTickets.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} onViewRaffle={onViewRaffle} autoDownload={ticket.id === focusTicketId} onAutoDownloadHandled={onFocusHandled} /* olvin */ />)}</div>}
   </div>;
 };

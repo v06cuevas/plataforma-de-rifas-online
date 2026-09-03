@@ -1,3 +1,5 @@
+// olvin: archivo reescrito por completo (antes generaba un diseño de
+// "certificado" aparte en vez de descargar el boleto real).
 import html2canvas from 'html2canvas';
 import { Ticket } from '../types';
 
@@ -10,6 +12,7 @@ import { Ticket } from '../types';
 // dispositivos (no solo iOS). Antes de capturar, convertimos esos colores
 // a rgb()/rgba() usando el propio motor de Canvas 2D (que sí entiende
 // oklch/color-mix), sin alterar el diseño visible.
+// olvin: fix de compatibilidad Tailwind v4 (oklch/color-mix) para html2canvas
 const MODERN_COLOR_FUNCTIONS = ['color-mix', 'oklch', 'oklab', 'lch', 'lab', 'color'];
 
 function resolveColorExpression(expr: string, ctx: CanvasRenderingContext2D): string {
@@ -112,7 +115,7 @@ function sanitizeModernColorsForCapture(root: HTMLElement, doc: Document) {
  */
 export async function generateTicketImage(
   ticket: Ticket,
-  ticketElement: HTMLElement
+  ticketElement: HTMLElement // olvin: ahora recibe el nodo real del DOM del boleto
 ): Promise<void> {
   try {
     const canvas = await html2canvas(ticketElement, {
@@ -121,9 +124,16 @@ export async function generateTicketImage(
       backgroundColor: '#ffffff',
       logging: false,
       allowTaint: false,
-      ignoreElements: (el) => el.getAttribute('data-html2canvas-ignore') === 'true',
-      onclone: (clonedDoc, clonedElement) => {
-        sanitizeModernColorsForCapture(clonedElement, clonedDoc);
+      ignoreElements: (el) => el.getAttribute('data-html2canvas-ignore') === 'true', // olvin
+      onclone: (clonedDoc) => {
+        // olvin: fix — html2canvas no garantiza el 2º argumento (elemento clonado),
+        // lo buscamos nosotros mismos por id dentro del documento clonado.
+        const clonedTicket = ticketElement.id
+          ? clonedDoc.getElementById(ticketElement.id)
+          : clonedDoc.body.firstElementChild;
+        if (clonedTicket instanceof HTMLElement) {
+          sanitizeModernColorsForCapture(clonedTicket, clonedDoc);
+        }
       },
     });
 
@@ -143,7 +153,7 @@ export async function generateTicketImage(
 
     // 1) Web Share API nativo (iOS/Android modernos): abre el share sheet
     //    real del sistema con la imagen ya adjunta, permitiendo "Guardar
-    //    imagen" con un solo toque, sin salir de la app.
+    //    imagen" con un solo toque, sin salir de la app. // olvin
     if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
       try {
         const file = new File([blob], fileName, { type: 'image/png' });
@@ -189,7 +199,8 @@ export async function generateTicketImage(
     URL.revokeObjectURL(blobUrl);
   } catch (error) {
     console.error('Error generando imagen del boleto:', error);
-    alert('Error al generar la imagen del boleto. Intenta de nuevo.');
+    const detail = error instanceof Error ? error.message : String(error); // olvin
+    alert(`Error al generar la imagen del boleto. Intenta de nuevo.\n\n(${detail})`); // olvin
     throw error;
   }
 }
