@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     'fetchDrawResults', 'fetchMyTickets', 'fetchMySupportConversations',
     'fetchAllRafflesForAdmin', 'fetchAllTicketsForAdmin', 'fetchAllPaymentReportsForAdmin',
     'fetchAllSupportConversationsForAdmin', 'fetchManagedUsers', 'fetchAuditLogs',
-    'loginClient', 'loginAdmin', 'logout',
+    'loginClient', 'loginAdmin', 'logout', 'fetchTicketNumberAvailability',
   ].map((name) => [name, vi.fn()])) as Record<string, ReturnType<typeof vi.fn>>,
 }));
 

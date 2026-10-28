@@ -258,14 +258,61 @@ create index if not exists idx_tickets_raffle on public.tickets(raffle_id);
 create index if not exists idx_tickets_user on public.tickets(user_id);
 create index if not exists idx_tickets_payment_report on public.tickets(payment_report_id);
 
--- *** REGLA ANTI-DUPLICADOS (la más importante) ***
--- Un mismo número de boleto de una rifa NO puede existir dos veces mientras
--- esté reservado, pendiente de pago, confirmado o marcado ganador.
--- Si un boleto se cancela/rechaza, el número queda libre automáticamente
--- porque deja de contar para este índice único parcial.
-create unique index if not exists uq_tickets_raffle_number_active
-  on public.tickets (raffle_id, ticket_number)
+-- BEGIN GLOBAL TICKET UNIQUENESS
+-- Un número identifica un solo boleto activo en TODA la plataforma.
+-- Los ceros iniciales no cambian la identidad: 1, 0001 y 00001 son iguales.
+-- Cancelados y reembolsados liberan el número. No se renumeran datos existentes.
+lock table public.tickets in share row exclusive mode;
+
+do $$ begin
+  if exists (
+    select 1 from public.tickets
+    where status in ('pending_payment', 'confirmed', 'winner')
+      and ticket_number !~ '^[0-9]{1,10}$'
+  ) then
+    raise exception 'Hay boletos activos con números inválidos. Ejecuta VERIFICAR_BOLETOS.sql antes de aplicar la protección global.';
+  end if;
+  if exists (
+    select 1 from public.tickets
+    where case when status in ('pending_payment', 'confirmed', 'winner')
+      then ticket_number::numeric < 1 or ticket_number::numeric > 2147483647 else false end
+  ) then
+    raise exception 'Hay boletos activos fuera del rango numérico permitido. Ejecuta VERIFICAR_BOLETOS.sql.';
+  end if;
+  if exists (
+    select 1 from public.tickets
+    where status in ('pending_payment', 'confirmed', 'winner')
+    group by ticket_number::bigint having count(*) > 1
+  ) then
+    raise exception 'Ya existen números de boleto repetidos en la plataforma. Ejecuta VERIFICAR_BOLETOS.sql y resuelve los casos antes de aplicar la protección global.';
+  end if;
+end $$;
+
+create or replace function public.normalize_ticket_number()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.ticket_number is null or new.ticket_number !~ '^[0-9]{1,10}$' then
+    raise exception 'Número de boleto inválido.';
+  end if;
+  if new.ticket_number::numeric < 1 or new.ticket_number::numeric > 2147483647 then
+    raise exception 'Número de boleto inválido.';
+  end if;
+  new.ticket_number := lpad(new.ticket_number::bigint::text,
+    greatest(5, length(new.ticket_number::bigint::text)), '0');
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_normalize_ticket_number on public.tickets;
+create trigger trg_normalize_ticket_number
+  before insert or update of ticket_number on public.tickets
+  for each row execute function public.normalize_ticket_number();
+
+create unique index if not exists uq_tickets_number_active_global
+  on public.tickets ((ticket_number::bigint))
   where (status in ('pending_payment', 'confirmed', 'winner'));
+drop index if exists public.uq_tickets_raffle_number_active;
+-- END GLOBAL TICKET UNIQUENESS
 
 -- -------------------------------------------------------------------------
 -- 9. TABLA: draw_results (resultados de sorteos, públicos y verificables)
@@ -386,14 +433,17 @@ begin
      or p_ticket_number::numeric < 1 or p_ticket_number::numeric > 2147483647 then
     raise exception 'Número de boleto inválido.';
   end if;
-  if not v_raffle.allow_sales_beyond_limit and p_ticket_number::numeric > v_raffle.total_tickets then
-    raise exception 'El número de boleto supera el límite de la rifa.';
+  if not v_raffle.allow_sales_beyond_limit and (
+    select count(*) from public.tickets
+    where raffle_id = p_raffle_id and status in ('pending_payment', 'confirmed', 'winner')
+  ) >= v_raffle.total_tickets then
+    raise exception 'No quedan suficientes boletos disponibles en esta rifa.';
   end if;
   if p_price_paid is distinct from v_raffle.ticket_price then
     raise exception 'El precio del boleto no coincide con el de la rifa.';
   end if;
   p_ticket_number := lpad(p_ticket_number::integer::text,
-    greatest(4, length(v_raffle.total_tickets::text), length(p_ticket_number::integer::text)), '0');
+    greatest(5, length(p_ticket_number::integer::text)), '0');
 
   insert into public.tickets (raffle_id, user_id, ticket_number, status, price_paid)
   values (p_raffle_id, auth.uid(), p_ticket_number, 'pending_payment', p_price_paid)
@@ -525,15 +575,14 @@ begin
   if exists (
     select 1 from unnest(p_ticket_numbers || coalesce(p_bonus_numbers, '{}'::text[])) n
     where n::numeric < 1 or n::numeric > 2147483647
-      or (not v_raffle.allow_sales_beyond_limit and n::numeric > v_raffle.total_tickets)
   ) then
     raise exception 'Hay números fuera del límite de la rifa.';
   end if;
   select array_agg(lpad(n::integer::text,
-    greatest(4, length(v_raffle.total_tickets::text), length(n::integer::text)), '0'))
+    greatest(5, length(n::integer::text)), '0') order by n::integer)
     into v_numbers from unnest(p_ticket_numbers) n;
   select coalesce(array_agg(lpad(n::integer::text,
-    greatest(4, length(v_raffle.total_tickets::text), length(n::integer::text)), '0')), '{}'::text[])
+    greatest(5, length(n::integer::text)), '0') order by n::integer), '{}'::text[])
     into v_bonus from unnest(coalesce(p_bonus_numbers, '{}'::text[])) n;
 
   if (select count(distinct n) from unnest(v_numbers) n) <> cardinality(v_numbers)
@@ -553,6 +602,13 @@ begin
   end if;
   if v_bonus_count > v_expected_bonus then
     raise exception 'La cantidad de boletos gratis supera la promoción de esta rifa.';
+  end if;
+  -- El límite de una rifa es su cantidad de boletos, no el valor del número global.
+  if not v_raffle.allow_sales_beyond_limit and (
+    select count(*) from public.tickets
+    where raffle_id = p_raffle_id and status in ('pending_payment', 'confirmed', 'winner')
+  ) + cardinality(v_numbers) > v_raffle.total_tickets then
+    raise exception 'No quedan suficientes boletos disponibles en esta rifa.';
   end if;
   v_amount := v_paid_count * v_raffle.ticket_price;
   if p_total_amount is distinct from v_amount then
@@ -595,7 +651,7 @@ begin
   );
 exception
   when unique_violation then
-    raise exception 'Uno de los boletos ya fue reservado. Actualiza la rifa y elige otro número.';
+    raise exception 'Uno de los números ya está reservado o vendido en la plataforma. Actualiza la rifa y elige otro número.';
 end;
 $$;
 
@@ -687,7 +743,7 @@ drop policy if exists "payment_reports_admin_update" on public.payment_reports;
 create policy "payment_reports_admin_update" on public.payment_reports
   for update using (public.is_admin());
 
--- TICKETS: el usuario ve los suyos; la creación se hace vía reserve_ticket().
+-- TICKETS: el usuario ve los suyos; la creación se hace vía submit_payment_report().
 drop policy if exists "tickets_owner_read" on public.tickets;
 create policy "tickets_owner_read" on public.tickets
   for select using (user_id = auth.uid() or public.is_admin());
@@ -784,16 +840,32 @@ create index if not exists idx_admin_email_2fa_codes_user_created
 
 alter table public.admin_email_2fa_codes enable row level security;
 
--- Disponibilidad pública sin exponer nombres, documentos ni datos de compradores.
+-- Disponibilidad global: solo números ocupados, sin compradores ni identificadores de rifa.
 create or replace function public.get_taken_ticket_numbers(p_raffle_id uuid)
 returns text[] language sql stable security definer set search_path = public as $$
-  select coalesce(array_agg(t.ticket_number order by t.ticket_number), '{}'::text[])
+  select coalesce(array_agg(t.ticket_number order by t.ticket_number::bigint), '{}'::text[])
   from public.tickets t
-  where t.raffle_id = p_raffle_id and t.status in ('pending_payment', 'confirmed', 'winner')
+  where t.status in ('pending_payment', 'confirmed', 'winner')
     and exists (
       select 1 from public.raffles r where r.id = p_raffle_id
         and (r.status in ('active', 'closed', 'drawn') or public.is_admin())
     );
+$$;
+
+-- La versión del protocolo permite que una web nueva siga funcionando con el SQL anterior.
+create or replace function public.get_ticket_number_availability(p_raffle_id uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'scope', 'platform',
+    'minimumDigits', 5,
+    'numbers', public.get_taken_ticket_numbers(p_raffle_id),
+    'remainingTickets', case when r.allow_sales_beyond_limit then null else greatest(0,
+      r.total_tickets - (select count(*) from public.tickets t
+        where t.raffle_id = r.id and t.status in ('pending_payment', 'confirmed', 'winner')))
+      end
+  )
+  from public.raffles r where r.id = p_raffle_id
+    and (r.status in ('active', 'closed', 'drawn') or public.is_admin());
 $$;
 
 -- =========================================================================
@@ -845,6 +917,8 @@ revoke all on function public.is_admin() from public;
 grant execute on function public.is_admin() to anon, authenticated;
 revoke all on function public.get_taken_ticket_numbers(uuid) from public;
 grant execute on function public.get_taken_ticket_numbers(uuid) to anon, authenticated;
+revoke all on function public.get_ticket_number_availability(uuid) from public;
+grant execute on function public.get_ticket_number_availability(uuid) to anon, authenticated;
 grant all on all tables in schema public to service_role;
 grant execute on all functions in schema public to service_role;
 

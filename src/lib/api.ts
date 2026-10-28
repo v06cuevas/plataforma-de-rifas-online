@@ -404,6 +404,27 @@ export async function fetchTakenTicketNumbers(raffleId: string): Promise<string[
   return data || [];
 }
 
+export interface TicketNumberAvailability {
+  numbers: string[];
+  scope: 'platform' | 'raffle';
+  minimumDigits: number;
+  remainingTickets?: number | null;
+}
+
+export async function fetchTicketNumberAvailability(raffleId: string): Promise<TicketNumberAvailability> {
+  const { data, error } = await supabase.rpc('get_ticket_number_availability', { p_raffle_id: raffleId });
+  if (error?.code === 'PGRST202') {
+    // Compatibilidad durante el despliegue: el pool global solo se activa
+    // cuando la base confirma que la migración ya está aplicada.
+    return { numbers: await fetchTakenTicketNumbers(raffleId), scope: 'raffle', minimumDigits: 4 };
+  }
+  if (error) throw error;
+  if (!data || data.scope !== 'platform' || !Array.isArray(data.numbers)) {
+    throw new Error('No se pudo comprobar la disponibilidad de los números.');
+  }
+  return data;
+}
+
 export async function fetchActiveRaffles(): Promise<Raffle[]> {
   return fetchRaffles(['active', 'closed', 'drawn']);
 }

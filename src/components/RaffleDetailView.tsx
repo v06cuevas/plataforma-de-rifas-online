@@ -6,7 +6,8 @@ import {
   Video, Film, ChevronLeft, Maximize2, Image as ImageIcon, Circle
 } from 'lucide-react';
 import { Raffle, Ticket, MediaItem } from '../types';
-import { fetchTakenTicketNumbers } from '../lib/api';
+import { fetchTicketNumberAvailability, type TicketNumberAvailability } from '../lib/api';
+import { generateAvailableTicketNumbers } from '../lib/ticketNumbers';
 
 interface RaffleDetailViewProps {
   raffle: Raffle;
@@ -102,14 +103,21 @@ export const RaffleDetailView: React.FC<RaffleDetailViewProps> = ({
   }, [showLightboxModal, mediaList.length]);
 
   const safeTicketsList = allTickets || existingTickets || [];
-  const [publicTakenNumbers, setPublicTakenNumbers] = useState<string[]>([]);
+  const [numberAvailability, setNumberAvailability] = useState<TicketNumberAvailability>({
+    numbers: [], scope: 'raffle', minimumDigits: 4,
+  });
+  const publicTakenNumbers = numberAvailability.numbers;
+  const usesGlobalNumbers = numberAvailability.scope === 'platform';
+  useEffect(() => {
+    setSelectedNumbers([]);
+    setNumberAvailability({ numbers: [], scope: 'raffle', minimumDigits: 4 });
+  }, [raffle.id]);
   useEffect(() => {
     let disposed = false;
-    setPublicTakenNumbers([]);
     const refresh = async () => {
       try {
-        const numbers = await fetchTakenTicketNumbers(raffle.id);
-        if (!disposed) setPublicTakenNumbers(numbers);
+        const availability = await fetchTicketNumberAvailability(raffle.id);
+        if (!disposed) setNumberAvailability(availability);
       } catch (error) {
         console.error('No se pudo actualizar la disponibilidad:', error);
       }
@@ -126,119 +134,35 @@ export const RaffleDetailView: React.FC<RaffleDetailViewProps> = ({
   const imageCount = mediaList.filter(m => m.type === 'image').length;
 
   // Find all numbers that are already confirmed or pending payment for this raffle
-  const { takenNumbersStrSet, takenNumbersIntSet } = useMemo(() => {
-    const strSet = new Set<string>();
-    const intSet = new Set<number>();
-    if (!raffle?.id) return { takenNumbersStrSet: strSet, takenNumbersIntSet: intSet };
-
-    publicTakenNumbers.forEach((number) => {
-      strSet.add(number);
-      intSet.add(Number(number));
-    });
+  const takenNumbersStrSet = useMemo(() => {
+    const strSet = new Set(publicTakenNumbers);
+    if (!raffle?.id) return strSet;
 
     safeTicketsList
-      .filter((t) => t?.raffleId === raffle.id && (t?.status === 'confirmed' || t?.status === 'pending_payment' || t?.status === 'winner'))
+      .filter((t) => (usesGlobalNumbers || t?.raffleId === raffle.id) && (t?.status === 'confirmed' || t?.status === 'pending_payment' || t?.status === 'winner'))
       .forEach((t) => {
         if (t?.ticketNumber) {
           strSet.add(t.ticketNumber);
-          const parsed = parseInt(t.ticketNumber, 10);
-          if (!isNaN(parsed) && parsed > 0) {
-            intSet.add(parsed);
-          }
         }
       });
-    return { takenNumbersStrSet: strSet, takenNumbersIntSet: intSet };
-  }, [safeTicketsList, publicTakenNumbers, raffle?.id]);
-
-  // Max ticket number currently observed in taken set
-  const maxTicketNumberObserved = useMemo(() => {
-    let max = raffle?.totalTickets || 100;
-    takenNumbersIntSet.forEach((numInt) => {
-      if (numInt > max) {
-        max = numInt;
-      }
-    });
-    return max;
-  }, [takenNumbersIntSet, raffle?.totalTickets]);
+    return strSet;
+  }, [safeTicketsList, publicTakenNumbers, raffle?.id, usesGlobalNumbers]);
 
   // Dynamic formatting padding based on total tickets (e.g. 100 -> 4 digits '0042', 200,000 -> 6 digits '084920')
   const digitPadding = useMemo(() => {
     const total = raffle?.totalTickets || 1000;
-    return Math.max(4, String(total).length);
-  }, [raffle?.totalTickets]);
+    return usesGlobalNumbers ? numberAvailability.minimumDigits : Math.max(4, String(total).length);
+  }, [raffle?.totalTickets, usesGlobalNumbers, numberAvailability.minimumDigits]);
 
-  const formatTicketNumber = (num: number): string => {
-    return num.toString().padStart(digitPadding, '0');
-  };
-
-  // High-performance cryptographic/pseudo-random unique number generator
-  // Guarantees 100% uniqueness with zero repeated numbers across 10k, 100k, 200k+ tickets
-  const generateRandomAvailableNumbers = (count: number, currentSelected: string[] = []): string[] => {
-    if (count <= 0) return [];
-    const results: string[] = [];
-    const chosenStrSet = new Set<string>(currentSelected);
-    const chosenIntSet = new Set<number>();
-
-    currentSelected.forEach((s) => {
-      const parsed = parseInt(s, 10);
-      if (!isNaN(parsed)) chosenIntSet.add(parsed);
+  const remainingCapacity = allowSalesBeyondLimit ? null : numberAvailability.remainingTickets
+    ?? Math.max(0, raffle.totalTickets - (raffle.soldTicketsCount || 0) - (raffle.reservedTicketsCount || 0));
+  const generateRandomAvailableNumbers = (count: number, currentSelected: string[] = []) =>
+    generateAvailableTicketNumbers({
+      count, currentSelected, takenNumbers: takenNumbersStrSet,
+      poolSize: raffle.totalTickets, minimumDigits: digitPadding,
+      canExpand: usesGlobalNumbers || allowSalesBeyondLimit,
+      remainingTickets: remainingCapacity,
     });
-
-    const maxVal = allowSalesBeyondLimit
-      ? Math.max(raffle.totalTickets, maxTicketNumberObserved + count + 200)
-      : raffle.totalTickets;
-
-    let attempts = 0;
-    const maxAttempts = Math.max(count * 500, 5000);
-
-    while (results.length < count && attempts < maxAttempts) {
-      attempts++;
-      const randInt = Math.floor(Math.random() * maxVal) + 1;
-      const formatted = formatTicketNumber(randInt);
-
-      const isTaken = takenNumbersIntSet.has(randInt) || takenNumbersStrSet.has(formatted);
-      const isAlreadyChosen = chosenIntSet.has(randInt) || chosenStrSet.has(formatted);
-
-      if (!isTaken && !isAlreadyChosen) {
-        chosenIntSet.add(randInt);
-        chosenStrSet.add(formatted);
-        results.push(formatted);
-      }
-    }
-
-    // Fallback scan if random sampling encounters dense regions
-    if (results.length < count) {
-      for (let i = 1; i <= maxVal && results.length < count; i++) {
-        const formatted = formatTicketNumber(i);
-        const isTaken = takenNumbersIntSet.has(i) || takenNumbersStrSet.has(formatted);
-        const isAlreadyChosen = chosenIntSet.has(i) || chosenStrSet.has(formatted);
-
-        if (!isTaken && !isAlreadyChosen) {
-          chosenIntSet.add(i);
-          chosenStrSet.add(formatted);
-          results.push(formatted);
-        }
-      }
-
-      if (results.length < count && allowSalesBeyondLimit) {
-        let nextI = maxVal + 1;
-        while (results.length < count) {
-          const formatted = formatTicketNumber(nextI);
-          const isTaken = takenNumbersIntSet.has(nextI) || takenNumbersStrSet.has(formatted);
-          const isAlreadyChosen = chosenIntSet.has(nextI) || chosenStrSet.has(formatted);
-
-          if (!isTaken && !isAlreadyChosen) {
-            chosenIntSet.add(nextI);
-            chosenStrSet.add(formatted);
-            results.push(formatted);
-          }
-          nextI++;
-        }
-      }
-    }
-
-    return Array.from(new Set(results));
-  };
 
   // Promotional Event Bonus Calculation (Buy X Get Y Free)
   const buyThreshold = raffle?.hasBonusPromotion && raffle?.bonusBuyThreshold && raffle.bonusBuyThreshold > 0 ? raffle.bonusBuyThreshold : 0;
@@ -251,7 +175,7 @@ export const RaffleDetailView: React.FC<RaffleDetailViewProps> = ({
   const bonusNumbers = useMemo(() => {
     if (bonusTicketsEarned <= 0 || !raffle?.totalTickets) return [];
     return generateRandomAvailableNumbers(bonusTicketsEarned, selectedNumbers);
-  }, [bonusTicketsEarned, raffle?.totalTickets, takenNumbersIntSet, takenNumbersStrSet, selectedNumbers, allowSalesBeyondLimit, maxTicketNumberObserved, digitPadding]);
+  }, [bonusTicketsEarned, raffle?.totalTickets, takenNumbersStrSet, selectedNumbers, allowSalesBeyondLimit, usesGlobalNumbers, remainingCapacity, digitPadding]);
 
   const ticketsUntilNextBonus = buyThreshold > 0 ? buyThreshold - (selectedNumbers.length % buyThreshold) : 0;
 

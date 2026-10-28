@@ -93,6 +93,34 @@ Las portadas de `raffle-media` son públicas. El script de Storage también conv
 un bucket antiguo de comprobantes en privado; el panel firma las URL públicas antiguas
 al leer los reportes. Los archivos no se borran.
 
+## Números únicos de boleto
+
+Los números son únicos **en toda la plataforma** mientras el boleto esté pendiente,
+confirmado o sea ganador, incluidos los boletos de regalo. `1`, `0001` y `00001`
+identifican el mismo número. Al cancelar/rechazar o reembolsar un boleto, el número
+queda disponible para otro comprador. El historial del boleto anterior se conserva.
+
+La base impide dos asignaciones activas del mismo número mediante un índice único
+numérico global. Un conflicto revierte el pedido completo. Los números nuevos tienen
+al menos cinco dígitos; los boletos antiguos conservan su presentación.
+El cupo de una rifa limita su cantidad de boletos, no el valor del número global.
+
+Para actualizar un proyecto Supabase existente:
+
+1. Ejecuta [VERIFICAR_BOLETOS.sql](VERIFICAR_BOLETOS.sql) en el SQL Editor.
+   Las dos primeras consultas deben devolver cero filas.
+2. Ejecuta completo
+   [20261028000000_global_ticket_numbers.sql](supabase/migrations/20261028000000_global_ticket_numbers.sql).
+3. Repite la verificación y recarga la web. La tercera consulta debe mostrar
+   `uq_tickets_number_active_global` con `UNIQUE` y `ticket_number::bigint`.
+
+Si ya hay números activos repetidos o inválidos, la migración se detiene sin
+borrar, cancelar ni renumerar boletos. Hay que revisar esos casos antes de continuar.
+Publicar la web no ejecuta esta migración: hasta aplicarla, el selector conserva
+el protocolo anterior. Las instalaciones nuevas con `SUPABASE_COMPLETO.sql` ya
+incluyen la protección. `npm run sql:build` regenera el instalador completo desde
+las fuentes; la migración se conserva como un cambio independiente.
+
 ## Verificación
 
 ```powershell

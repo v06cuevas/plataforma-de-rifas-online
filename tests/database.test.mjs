@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { PGlite } from '@electric-sql/pglite';
+import { createTestDatabase } from './helpers/database.mjs';
 
 const files = await Promise.all(
   ['supabase_schema.sql', 'STORAGE_SETUP.sql', 'HABILITAR_REALTIME.sql', 'AGREGAR_PRIZE_DETAILS.sql']
@@ -18,34 +18,8 @@ const hidden = '20000000-0000-0000-0000-000000000002';
 const conversation = '30000000-0000-0000-0000-000000000001';
 
 test('Esquema Supabase y reglas de compra en PostgreSQL local', async (t) => {
-  const db = new PGlite();
+  const db = await createTestDatabase();
   t.after(() => db.close());
-  await db.exec(`
-    create role anon;
-    create role authenticated;
-    create role service_role bypassrls;
-    create schema auth;
-    create schema storage;
-    create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}');
-    create function auth.uid() returns uuid language sql stable as $$
-      select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
-    $$;
-    grant usage on schema auth, storage to anon, authenticated, service_role;
-    grant execute on function auth.uid() to anon, authenticated, service_role;
-    create table storage.buckets (
-      id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]
-    );
-    create table storage.objects (
-      id uuid primary key default gen_random_uuid(), bucket_id text, name text
-    );
-    alter table storage.objects enable row level security;
-    create function storage.foldername(text) returns text[] language sql immutable as $$
-      select (string_to_array($1, '/'))[1:array_length(string_to_array($1, '/'), 1)-1];
-    $$;
-    grant all on storage.objects to anon, authenticated, service_role;
-    alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
-    alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;
-  `);
 
   const scalar = async (sql, args = []) => (await db.query(sql, args)).rows[0];
   async function asUser(role, id, work) {
@@ -105,15 +79,15 @@ test('Esquema Supabase y reglas de compra en PostgreSQL local', async (t) => {
     const tickets = (await db.query(`select ticket_number, price_paid, is_bonus_ticket, payment_report_id
       from public.tickets where payment_report_id = $1 order by ticket_number`, [payment.id])).rows;
     assert.equal(tickets.length, 3);
-    assert.equal(tickets[2].ticket_number, '0003');
+    assert.equal(tickets[2].ticket_number, '00003');
     assert.equal(tickets[2].price_paid, '0.00');
     assert.equal(tickets[2].is_bonus_ticket, true);
     assert.ok(tickets.every((ticket) => ticket.payment_report_id === payment.id));
   });
 
   await t.test('un conflicto revierte el reporte y todos los boletos del pedido', async () => {
-    await assert.rejects(asUser('authenticated', alice, () => checkout(['4', '1'])), /ya fue reservado/);
-    assert.equal((await scalar("select count(*)::int as total from public.tickets where ticket_number = '0004'")).total, 0);
+    await assert.rejects(asUser('authenticated', alice, () => checkout(['4', '1'])), /reservado/);
+    assert.equal((await scalar("select count(*)::int as total from public.tickets where ticket_number = '00004'")).total, 0);
     assert.equal((await scalar('select count(*)::int as total from public.payment_reports')).total, 1);
   });
 
@@ -124,7 +98,7 @@ test('Esquema Supabase y reglas de compra en PostgreSQL local', async (t) => {
   });
 
   await t.test('valida duplicados, números, banco, estado y propiedad del comprobante', async () => {
-    for (const numbers of [['1', '0001'], ['0'], ['101'], ['abc'], [null], []]) {
+    for (const numbers of [['1', '0001'], ['0'], ['2147483648'], ['abc'], [null], []]) {
       await assert.rejects(asUser('authenticated', alice, () => checkout(numbers)));
     }
     await assert.rejects(asUser('authenticated', alice, () => checkout(['5'], [], 10, { bank: 'Inexistente' })), /bancaria/);
@@ -157,9 +131,9 @@ test('Esquema Supabase y reglas de compra en PostgreSQL local', async (t) => {
     });
   });
 
-  await t.test('la disponibilidad pública solo expone números de las rifas visibles', async () => {
+  await t.test('la disponibilidad pública exige una rifa visible y solo expone números', async () => {
     await asUser('anon', null, async () => {
-      assert.deepEqual((await scalar('select public.get_taken_ticket_numbers($1) as numbers', [raffle])).numbers, ['0001', '0002', '0003']);
+      assert.deepEqual((await scalar('select public.get_taken_ticket_numbers($1) as numbers', [raffle])).numbers, ['00001', '00002', '00003']);
       assert.deepEqual((await scalar('select public.get_taken_ticket_numbers($1) as numbers', [hidden])).numbers, []);
     });
   });
@@ -178,7 +152,7 @@ test('Esquema Supabase y reglas de compra en PostgreSQL local', async (t) => {
     const rejected = (await asUser('authenticated', alice, () => checkout(['5']))).report;
     await asUser('authenticated', admin, () => db.query('select public.review_payment_report($1, false)', [rejected.id]));
     await asUser('authenticated', bob, () => checkout(['5'], [], 10, { receipt: bob + '/receipt.pdf' }));
-    assert.equal((await scalar("select count(*)::int as total from public.tickets where ticket_number = '0005' and status = 'pending_payment'")).total, 1);
+    assert.equal((await scalar("select count(*)::int as total from public.tickets where ticket_number = '00005' and status = 'pending_payment'")).total, 1);
   });
 
   await t.test('el cliente no puede cambiar su rol ni desbloquear su cuenta', async () => {
