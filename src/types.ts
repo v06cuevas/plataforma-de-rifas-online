@@ -206,3 +206,9 @@ export interface UserProfile {
   isLoggedIn: boolean;
   role: 'client' | 'admin';
 }
+
+export interface AdminProfile {
+  name: string;
+  role: 'admin';
+  email: string;
+}

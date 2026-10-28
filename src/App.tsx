@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
-import { ScreenType, UserProfile, Raffle, Ticket, PaymentReport, DrawResult, SupportConversation, AppNotification, RaffleStatus, ManagedUser, BankAccount, AdminAuditLog } from './types';
+import { ScreenType, UserProfile, AdminProfile, Raffle, Ticket, PaymentReport, DrawResult, SupportConversation, AppNotification, RaffleStatus, ManagedUser, BankAccount, AdminAuditLog } from './types';
 import * as api from './lib/api';
 import { supabase } from './lib/supabaseClient';
 import { subscribeToRealtimeUpdates, startPollingFallback } from './lib/realtimeSubscriptions';
@@ -75,16 +75,68 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isAdminLoginOpen, setIsAdminLoginOpen] = useState(false);
-  const [adminProfile, setAdminProfile] = useState<{ name: string; role: string; email: string } | null>(null);
+  const [adminProfile, setAdminProfile] = useState<AdminProfile | null>(null);
+  const [isAdminDataLoading, setIsAdminDataLoading] = useState(false);
+  const [adminDataErrors, setAdminDataErrors] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Refs para manejar subscripciones y polling
   const unsubscribeRealtimeRef = useRef<(() => void) | null>(null);
   const unsubscribePollingRef = useRef<(() => void) | null>(null);
+  const adminIdentityRef = useRef<string | null>(null);
+  const sessionVersionRef = useRef(0);
+  const adminLoadVersionRef = useRef(0);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 4500);
+  };
+
+  const clearPrivateData = () => {
+    setRaffles([]);
+    setBankAccounts([]);
+    setTickets([]);
+    setPaymentReports([]);
+    setSupportConversations([]);
+    setManagedUsers([]);
+    setAuditLogs([]);
+    setAdminDataErrors([]);
+    setIsAdminDataLoading(false);
+    adminLoadVersionRef.current++;
+  };
+
+  const syncSession = async (knownProfile?: UserProfile) => {
+    const version = sessionVersionRef.current;
+    let profile: UserProfile | null;
+    let admin: AdminProfile | null;
+    try {
+      profile = knownProfile ?? await api.fetchMyProfile();
+      admin = await api.fetchAdminSession(profile);
+    } catch (err) {
+      if (version !== sessionVersionRef.current) return null;
+      throw err;
+    }
+    if (version !== sessionVersionRef.current) return null;
+
+    const previousAdminId = adminIdentityRef.current;
+    adminIdentityRef.current = admin && profile ? profile.id : null;
+    setUser(profile || EMPTY_USER);
+    setAdminProfile(admin);
+
+    if (admin && previousAdminId !== profile.id) {
+      clearPrivateData();
+      setCurrentScreen('admin_dashboard');
+      setIsAuthModalOpen(false);
+      setIsAdminLoginOpen(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (!admin && previousAdminId) {
+      clearPrivateData();
+      setCurrentScreen('home');
+      void loadPublicData().catch((err) => console.error('Error recargando portada:', err));
+    }
+
+    if (profile?.role === 'admin' && !admin) setIsAdminLoginOpen(true);
+    return admin;
   };
 
   // -----------------------------------------------------------------
@@ -97,12 +149,12 @@ export default function App() {
     // en el "above the fold" de la portada, así que se cargan en paralelo
     // en segundo plano y NO retrasan el fin del estado "isLoading".
     const activeRaffles = await api.fetchActiveRaffles();
-    setRaffles(activeRaffles);
+    if (!adminIdentityRef.current) setRaffles(activeRaffles);
     if (activeRaffles.length > 0) setSelectedRaffleId(activeRaffles[0].id);
 
     Promise.all([api.fetchBankAccounts(true), api.fetchDrawResults()])
       .then(([banks, winners]) => {
-        setBankAccounts(banks);
+        if (!adminIdentityRef.current) setBankAccounts(banks);
         setDrawResults(winners);
       })
       .catch((err) => {
@@ -124,18 +176,10 @@ export default function App() {
     (async () => {
       try {
         // Carga inicial de datos públicos (rifas). En cuanto esto resuelve,
-        // ya podemos quitar el spinner y pintar la portada: el chequeo de
-        // sesión de abajo NO debe retrasar ese primer pintado.
+        // ya podemos quitar el spinner y pintar la portada. La sesión se
+        // restaura por separado con INITIAL_SESSION.
         await loadPublicData();
         setIsLoading(false);
-
-        // Verificar si hay sesión existente (desde localStorage). Esto pasa
-        // en segundo plano, después de que la portada ya es visible.
-        const profile = await api.fetchMyProfile();
-        if (profile) {
-          setUser(profile);
-          await loadMyClientData();
-        }
       } catch (err) {
         console.error('Error en carga inicial:', err);
         showToast('No se pudo conectar con la base de datos. Revisa tu configuración de Supabase.');
@@ -148,22 +192,31 @@ export default function App() {
     let authReloadTimer: ReturnType<typeof setTimeout> | undefined;
     const { data: authSub } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
+        sessionVersionRef.current++;
+        adminIdentityRef.current = null;
+        clearTimeout(authReloadTimer);
         setUser(EMPTY_USER);
-        setTickets([]);
-        setSupportConversations([]);
-      } else if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+        setAdminProfile(null);
+        setCurrentScreen('home');
+        clearPrivateData();
+        void loadPublicData().catch((err) => console.error('Error recargando portada:', err));
+      } else if (['INITIAL_SESSION', 'SIGNED_IN', 'USER_UPDATED', 'TOKEN_REFRESHED', 'MFA_CHALLENGE_VERIFIED'].includes(event)) {
+        sessionVersionRef.current++;
         // Las llamadas a Auth deben ejecutarse fuera del callback: éste mantiene
         // el bloqueo de sesión y esperar getSession() aquí puede bloquear el login.
         clearTimeout(authReloadTimer);
         authReloadTimer = setTimeout(async () => {
           try {
-            const updatedProfile = await api.fetchMyProfile();
-            if (!disposed && updatedProfile) {
-              setUser(updatedProfile);
-              await loadMyClientData();
-            }
-          } catch (err) {
+            if (!disposed) await syncSession();
+          } catch (err: any) {
+            if (disposed) return;
             console.error('Error actualizando perfil:', err);
+            adminIdentityRef.current = null;
+            setAdminProfile(null);
+            setUser(EMPTY_USER);
+            setCurrentScreen('home');
+            clearPrivateData();
+            showToast(err?.message || 'No se pudo verificar tu acceso. Vuelve a iniciar sesión.');
           }
         }, 0);
       }
@@ -172,6 +225,7 @@ export default function App() {
     // Limpiar
     return () => {
       disposed = true;
+      sessionVersionRef.current++;
       clearTimeout(authReloadTimer);
       authSub?.subscription.unsubscribe();
       if (unsubscribeRealtimeRef.current) unsubscribeRealtimeRef.current();
@@ -179,41 +233,49 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!user.isLoggedIn || adminProfile) return;
+    let disposed = false;
+    Promise.all([api.fetchMyTickets(), api.fetchMySupportConversations()])
+      .then(([myTickets, myConversations]) => {
+        if (disposed) return;
+        setTickets(myTickets);
+        setSupportConversations(myConversations);
+      })
+      .catch((err) => console.error('Error cargando datos de la cuenta:', err));
+    return () => { disposed = true; };
+  }, [user.id, user.isLoggedIn, adminProfile?.email]);
+
   // Configurar suscripciones en tiempo real cuando el usuario cambia
   useEffect(() => {
     if (isLoading) return;
 
     const isAdmin = adminProfile?.role === 'admin';
+    let active = true;
+    const guardUpdate = <T,>(update: (data: T) => void) => (data: T) => {
+      if (active && (!isAdmin || adminIdentityRef.current)) update(data);
+    };
+    const callbacks = {
+      onRafflesUpdate: guardUpdate(setRaffles),
+      onTicketsUpdate: guardUpdate(setTickets),
+      onPaymentReportsUpdate: guardUpdate(setPaymentReports),
+      onDrawResultsUpdate: guardUpdate(setDrawResults),
+      onSupportConversationsUpdate: guardUpdate(setSupportConversations),
+      onError: (error: Error) => console.error('Error actualizando datos:', error),
+    };
 
     // Limpiar suscripciones anteriores
     if (unsubscribeRealtimeRef.current) unsubscribeRealtimeRef.current();
     if (unsubscribePollingRef.current) unsubscribePollingRef.current();
 
     // Configurar nuevas suscripciones
-    unsubscribeRealtimeRef.current = subscribeToRealtimeUpdates(isAdmin, {
-      onRafflesUpdate: setRaffles,
-      onTicketsUpdate: setTickets,
-      onPaymentReportsUpdate: setPaymentReports,
-      onDrawResultsUpdate: setDrawResults,
-      onSupportConversationsUpdate: setSupportConversations,
-      onError: (error) => {
-        console.error('Error en suscripción realtime:', error);
-      },
-    });
+    unsubscribeRealtimeRef.current = subscribeToRealtimeUpdates(isAdmin, callbacks);
 
     // Configurar polling como fallback (cada 30 segundos)
-    unsubscribePollingRef.current = startPollingFallback(isAdmin, {
-      onRafflesUpdate: setRaffles,
-      onTicketsUpdate: setTickets,
-      onPaymentReportsUpdate: setPaymentReports,
-      onDrawResultsUpdate: setDrawResults,
-      onSupportConversationsUpdate: setSupportConversations,
-      onError: (error) => {
-        console.error('Error en polling fallback:', error);
-      },
-    }, 30000);
+    unsubscribePollingRef.current = startPollingFallback(isAdmin, callbacks, 30000);
 
     return () => {
+      active = false;
       if (unsubscribeRealtimeRef.current) unsubscribeRealtimeRef.current();
       if (unsubscribePollingRef.current) unsubscribePollingRef.current();
     };
@@ -275,22 +337,53 @@ export default function App() {
   }, [currentScreen, selectedRaffleId]);
 
   const refreshAdminData = async () => {
-    const [allRaffles, allTickets, allPayments, allSupport, users, logs, winners] = await Promise.all([
-      api.fetchAllRafflesForAdmin(),
-      api.fetchAllTicketsForAdmin(),
-      api.fetchAllPaymentReportsForAdmin(),
-      api.fetchAllSupportConversationsForAdmin(),
-      api.fetchManagedUsers(),
-      api.fetchAuditLogs(),
-      api.fetchDrawResults(),
+    const adminId = adminIdentityRef.current;
+    if (!adminId) return;
+    const version = ++adminLoadVersionRef.current;
+    const isCurrent = () => version === adminLoadVersionRef.current && adminId === adminIdentityRef.current;
+    setIsAdminDataLoading(true);
+    setAdminDataErrors([]);
+
+    const loadSection = async <T,>(label: string, load: () => Promise<T>, update: (data: T) => void) => {
+      try {
+        const data = await load();
+        if (isCurrent()) update(data);
+      } catch (err) {
+        console.error(`Error cargando ${label}:`, err);
+        if (isCurrent()) setAdminDataErrors((previous) => [...previous, label]);
+      }
+    };
+
+    await Promise.all([
+      loadSection('rifas', api.fetchAllRafflesForAdmin, setRaffles),
+      loadSection('boletos', api.fetchAllTicketsForAdmin, setTickets),
+      loadSection('pagos', api.fetchAllPaymentReportsForAdmin, setPaymentReports),
+      loadSection('soporte', api.fetchAllSupportConversationsForAdmin, setSupportConversations),
+      loadSection('usuarios', api.fetchManagedUsers, setManagedUsers),
+      loadSection('auditoría', api.fetchAuditLogs, setAuditLogs),
+      loadSection('ganadores', api.fetchDrawResults, setDrawResults),
+      loadSection('cuentas bancarias', () => api.fetchBankAccounts(false), setBankAccounts),
     ]);
-    setRaffles(allRaffles);
-    setTickets(allTickets);
-    setPaymentReports(allPayments);
-    setSupportConversations(allSupport);
-    setManagedUsers(users);
-    setAuditLogs(logs);
-    setDrawResults(winners);
+    if (isCurrent()) setIsAdminDataLoading(false);
+  };
+
+  useEffect(() => {
+    if (adminProfile) void refreshAdminData();
+  }, [adminProfile?.email]);
+
+  const openAdminDashboard = async () => {
+    try {
+      const admin = await syncSession();
+      if (!admin) {
+        setIsAdminLoginOpen(true);
+        return;
+      }
+      setCurrentScreen('admin_dashboard');
+      void refreshAdminData();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err: any) {
+      showToast(err?.message || 'No se pudo verificar tu acceso al panel.');
+    }
   };
 
   // Client Flow Handlers
@@ -427,7 +520,7 @@ export default function App() {
   const activeRaffle = raffles.find((r) => r.id === selectedRaffleId) || raffles[0];
   const currentScreenValue = currentScreen as ScreenType;
 
-  if (isLoading) {
+  if (isLoading && !adminProfile) {
     return (
       <div className="w-full min-h-screen flex items-center justify-center bg-slate-100/70">
         <div className="flex flex-col items-center gap-3">
@@ -454,6 +547,9 @@ export default function App() {
             bankAccounts={bankAccounts}
             auditLogs={auditLogs}
             adminProfile={adminProfile}
+            isLoading={isAdminDataLoading}
+            dataErrors={adminDataErrors}
+            onRetryLoad={() => { void refreshAdminData(); }}
             onExitAdmin={async () => {
               setCurrentScreen('home');
               await loadPublicData();
@@ -507,16 +603,7 @@ export default function App() {
             onOpenEditProfile={user.isLoggedIn ? () => setIsEditProfileOpen(true) : undefined}
             onOpenAdminLogin={() => setIsAdminLoginOpen(true)}
             adminProfile={adminProfile}
-            onOpenAdminDashboard={async () => {
-              if (!adminProfile || adminProfile.role !== 'admin') {
-                showToast('No tienes permisos para abrir el panel administrativo.');
-                setCurrentScreen('home');
-                return;
-              }
-              await refreshAdminData();
-              setCurrentScreen('admin_dashboard');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
+            onOpenAdminDashboard={openAdminDashboard}
             onAdminLogout={async () => {
               await api.logout();
               setAdminProfile(null);
@@ -657,8 +744,7 @@ export default function App() {
             isOpen={isAuthModalOpen}
             onClose={() => setIsAuthModalOpen(false)}
             onLoginSuccess={async (loggedUser) => {
-              setUser(loggedUser);
-              await loadMyClientData();
+              await syncSession(loggedUser);
               showToast(`¡Bienvenido ${loggedUser.fullName}!`);
             }}
           />
@@ -682,11 +768,10 @@ export default function App() {
           <AdminLoginModal
             isOpen={isAdminLoginOpen}
             onClose={() => setIsAdminLoginOpen(false)}
-            onAdminLoginSuccess={async (adminData) => {
-              setAdminProfile(adminData);
-              await refreshAdminData();
-              setCurrentScreen('admin_dashboard');
-              showToast(`Sesión Administrativa Iniciada: ${adminData.name}`);
+            onAdminLoginSuccess={async () => {
+              const admin = await syncSession();
+              if (!admin) throw new Error('Completa la verificación de tu cuenta para abrir el panel.');
+              showToast(`Sesión Administrativa Iniciada: ${admin.name}`);
             }}
           />
         </Suspense>

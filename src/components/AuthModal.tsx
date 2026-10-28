@@ -6,7 +6,7 @@ import { registerClient, loginClient } from '../lib/api';
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (user: UserProfile) => void;
+  onLoginSuccess: (user: UserProfile) => void | Promise<void>;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSuccess }) => {
@@ -71,7 +71,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
         setPassword('');
         return;
       }
-      onLoginSuccess(profile);
+      await onLoginSuccess(profile);
       onClose();
     } catch (err: any) {
       setErrorMsg(err?.message || 'Ocurrió un error. Intenta de nuevo.');

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   LayoutDashboard, Layers, ShieldCheck, Users, DollarSign, MessageSquare, 
   Trophy, Building2, LogOut, Search, Bell, Clock, ChevronRight, Menu, X,
@@ -27,6 +27,9 @@ interface AdminDashboardViewProps {
   bankAccounts?: BankAccount[];
   auditLogs?: AdminAuditLog[];
   adminProfile?: { name: string; role: string; email: string } | null;
+  isLoading?: boolean;
+  dataErrors?: string[];
+  onRetryLoad?: () => void;
   onExitAdmin: () => void;
   onCreateOrUpdateRaffle: (raffle: Partial<Raffle> & { id?: string }) => void;
   onUpdateRaffleStatus: (raffleId: string, newStatus: RaffleStatus) => void;
@@ -48,7 +51,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   users = [],
   bankAccounts = [],
   auditLogs = [],
-  adminProfile = { name: 'Lic. Andrés Peralta', role: 'Super Administrador', email: 'admin@rifascariberd.com' },
+  adminProfile,
+  isLoading = false,
+  dataErrors = [],
+  onRetryLoad,
   onExitAdmin,
   onCreateOrUpdateRaffle,
   onUpdateRaffleStatus,
@@ -73,6 +79,9 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   // Local state for bank accounts and users if not passed from root
   const [localAccounts, setLocalAccounts] = useState<BankAccount[]>(bankAccounts || []);
   const [localUsers, setLocalUsers] = useState<ManagedUser[]>(users || []);
+
+  useEffect(() => { setLocalAccounts(bankAccounts || []); }, [bankAccounts]);
+  useEffect(() => { setLocalUsers(users || []); }, [users]);
 
   const pendingPaymentsCount = safePaymentReports.filter((p) => p.status === 'pending').length;
   const openSupportCount = safeSupportConversations.filter((c) => c.status === 'open').length;
@@ -252,6 +261,19 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
         {/* Dynamic Tab Body */}
         <main className="p-4 sm:p-6 lg:p-8 flex-1">
+          {isLoading && (
+            <p role="status" className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+              Cargando datos del panel…
+            </p>
+          )}
+          {dataErrors.length > 0 && (
+            <div role="alert" className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+              <p>No se pudieron cargar: {dataErrors.join(', ')}. Los datos de esas secciones pueden estar incompletos.</p>
+              <button type="button" onClick={onRetryLoad} disabled={isLoading} className="mt-2 font-bold underline disabled:opacity-50">
+                Reintentar carga
+              </button>
+            </div>
+          )}
           {activeTab === 'dashboard' && (
             <AdminDashboardTab
               raffles={safeRaffles}

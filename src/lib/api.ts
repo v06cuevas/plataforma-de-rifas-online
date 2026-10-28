@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient';
 import {
   BankAccount,
+  AdminProfile,
   Raffle,
   MediaItem,
   Ticket,
@@ -252,12 +253,15 @@ export async function fetchMyProfile(): Promise<UserProfile | null> {
   // (visitante anónimo incluido), ese round-trip extra era puro tiempo
   // perdido bloqueando el primer pintado (afecta LCP). Si no hay sesión
   // local, salimos de inmediato sin tocar la red.
-  const { data: sessionData } = await supabase.auth.getSession();
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw sessionError;
   const sessionUser = sessionData.session?.user;
   if (!sessionUser) return null;
 
-  const { data, error } = await supabase.from('users').select('*').eq('id', sessionUser.id).single();
-  if (error || !data) return null;
+  const { data, error } = await supabase.from('users').select('*').eq('id', sessionUser.id).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('No se encontró tu perfil en la base de datos. Contacta al administrador.');
+  if (data.status === 'blocked') throw new Error('Tu cuenta está bloqueada. Contacta con soporte.');
 
   return {
     id: data.id,
@@ -270,6 +274,19 @@ export async function fetchMyProfile(): Promise<UserProfile | null> {
   };
 }
 
+// El acceso normal y la restauración de sesión usan la misma comprobación
+// que el portal. Un administrador con MFA pendiente todavía no abre el panel.
+export async function fetchAdminSession(profile: UserProfile | null): Promise<AdminProfile | null> {
+  if (!profile?.isLoggedIn || profile.role !== 'admin') return null;
+
+  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error) throw error;
+  if (!data?.currentLevel) throw new Error('La sesión ha expirado. Inicia sesión de nuevo.');
+  if (data.nextLevel === 'aal2' && data.currentLevel !== 'aal2') return null;
+
+  return { name: profile.fullName, role: 'admin', email: profile.email };
+}
+
 /**
  * Login del panel administrador. Verifica contraseña Y que el rol en la
  * base de datos sea 'admin'. Si la cuenta tiene un factor TOTP (2FA)
@@ -280,7 +297,7 @@ export async function loginAdmin(
   email: string,
   password: string,
   totpCode?: string
-): Promise<{ name: string; role: string; email: string }> {
+): Promise<AdminProfile> {
   const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
   if (signInError) throw signInError;
 

@@ -61,13 +61,18 @@ set role = 'admin'
 where email = 'tu-correo@dominio.com';
 ```
 
-4. Entra por **Portal Administrativo**, en el pie de página, con tu correo y contraseña.
+4. Inicia sesión con tu correo y contraseña. Las cuentas con rol `admin` abren
+   automáticamente el panel, también al recargar una sesión existente. El acceso
+   **Portal Administrativo**, en el pie de página, permite entrar directamente.
 5. Crea al menos una cuenta bancaria activa y una rifa con estado `active`.
    Sin estos datos reales no habrá rifas para comprar.
 
 El registro público siempre crea clientes. El portal utiliza MFA TOTP nativo de Supabase:
 si la cuenta tiene un factor verificado inscrito, debes ingresar los seis dígitos de tu
 aplicación autenticadora. Si todavía no tiene uno, basta el correo y la contraseña.
+El acceso normal también pide completar 2FA antes de abrir el panel.
+Los errores al consultar el perfil se muestran en pantalla. Si falla la carga de
+una sección, el panel permanece abierto y ofrece **Reintentar carga**.
 La inscripción de factores se gestiona con Supabase Auth; esta app no incluye pantalla de inscripción.
 La Edge Function heredada `admin-email-2fa` no participa en este acceso;
 su implementación actual verifica un código fijo y no envía correos.
